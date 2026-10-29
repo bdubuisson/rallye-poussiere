@@ -55,7 +55,6 @@
 </div>
 
 <div id="tools" class="hidden">
-  <button id="cam" title="Caméra (C)">🎥</button>
   <button id="mute" title="Son (M)">🔊</button>
 </div>
 
@@ -69,14 +68,13 @@
   <div class="row">
     <button class="alt" id="bCpu"></button>
     <button class="alt" id="bLaps"></button>
-    <button class="alt" id="bCam"></button>
   </div>
   <div class="help">
     <b>Joueur 1 (rouge, écran de gauche)</b> : <span class="kbd">Z</span><span class="kbd">Q</span><span class="kbd">S</span><span class="kbd">D</span> + nitro <span class="kbd">Maj gauche</span><br>
     <b>Joueur 2 (bleu, écran de droite)</b> : <span class="kbd">↑</span><span class="kbd">←</span><span class="kbd">↓</span><span class="kbd">→</span> + nitro <span class="kbd">Entrée</span><br>
     En solo, les deux jeux de touches marchent. Manettes reconnues (A = gaz, B = frein, X/RB = nitro).<br>
     Sur tablette : la voiture accélère toute seule, ◀ ▶ pour tourner, les deux ensemble pour reculer.<br>
-    Ramasse les bidons verts pour gagner des nitros ! <span class="kbd">C</span> = caméra, <span class="kbd">M</span> = son, <span class="kbd">Échap</span> = menu.
+    Ramasse les bidons verts pour gagner des nitros ! <span class="kbd">M</span> = son, <span class="kbd">Échap</span> = menu.
   </div>
 </div>
 
@@ -113,8 +111,8 @@ const BOOST_TIME = 1.3, BOOST_V = 1.4, MAX_NITRO = 6, START_NITRO = 3;
 const HL = 1.65, HW = 0.92, INV_I = 12 / ((2 * HL) ** 2 + (2 * HW) ** 2);
 const E_CAR = 0.35, MU_CAR = 0.4, E_WALL = 0.3, MU_WALL = 0.35;
 const MAX_SPIN = 7;          // rad/s : limite la toupie après un gros choc
-const LOC_WIN = 40;
-const CAM_RIGHT = 2.6;        // décalage latéral de la caméra de poursuite          // fenêtre de recherche locale sur la ligne centrale
+const LOC_WIN = 40;          // fenêtre de recherche locale sur la ligne centrale
+const CAM_RIGHT = 2.6;       // décalage latéral de la caméra de poursuite
 
 const COLORS = [
   { name: 'Joueur 1', col: 0xe23a2c, css: '#e23a2c' },
@@ -577,7 +575,6 @@ addEventListener('keydown', e => {
   keys.add(e.code);
   if (e.code === 'Escape' && state !== 'menu') showMenu();
   if (e.code === 'KeyM') setMuted(!muted);
-  if (e.code === 'KeyC') toggleCam();
   if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
 });
 addEventListener('keyup', e => keys.delete(e.code));
@@ -620,7 +617,7 @@ function humanInput(p, solo) {
 
 // ---------- Voitures : physique ----------
 let cars = [], pickups = [], state = 'menu', raceTime = 0, countdown = 0, finishCount = 0, endTimer = 0, pickupTimer = 0;
-let opt = { players: 1, cpu: true, laps: 3, cam: 'chase' };
+let opt = { players: 1, cpu: true, laps: 3 };
 
 function makeCar(slot, human, gridPos) {
   const s = LEN - 7 - Math.floor(gridPos / 2) * 7.5, lane = gridPos % 2 ? -3.2 : 3.2;
@@ -634,7 +631,7 @@ function makeCar(slot, human, gridPos) {
   };
   c.mesh = makeCarMesh(c);
   if (human) {
-    c.cam = new THREE.PerspectiveCamera(60, 1, 0.3, 900);
+    c.cam = new THREE.PerspectiveCamera(66, 1, 0.3, 900);
     c.camYaw = c.ang; c.camPos = null; c.camLook = new THREE.Vector3();
   }
   return c;
@@ -856,32 +853,21 @@ function syncCar(c, dt) {
 
 // ---------- Caméras ----------
 const menuCam = new THREE.PerspectiveCamera(50, 1, 0.5, 1200);
-function toggleCam() { opt.cam = opt.cam === 'iso' ? 'chase' : 'iso'; for (const c of cars) c.camPos = null; updateMenuLabels(); }
 function updateCamera(c, dt, aspect) {
   const cam = c.cam, sp = Math.hypot(c.vx, c.vy);
-  let px, py, pz, lx, ly, lz, rate;
-  if (opt.cam === 'chase') {
-    const dir = sp > 4 && c.f > 2 ? Math.atan2(c.vy, c.vx) : c.ang;
-    c.camYaw += wrapAng(dir - c.camYaw) * (1 - Math.exp(-3 * dt));
-    const ch = Math.cos(c.camYaw), sh = Math.sin(c.camYaw);
-    // Derrière la voiture, décalée un peu vers la droite (vecteur droite = (-sh, ch))
-    px = c.x - ch * 11 - sh * CAM_RIGHT; py = c.y - sh * 11 + ch * CAM_RIGHT; pz = c.z * 0.6 + 4.8;
-    lx = c.x + ch * 6 - sh * 0.8; ly = c.y + sh * 6 + ch * 0.8; lz = c.z * 0.7 + 1.2;
-    cam.fov = 66; rate = 8;
-  } else {
-    // Vue 3/4 basse qui suit la voiture, regardant un peu devant elle
-    const ahead = clamp(sp / MAX_V, 0, 1) * 5;
-    lx = c.x + Math.cos(c.ang) * ahead; ly = c.y + Math.sin(c.ang) * ahead; lz = c.z * 0.5 + 0.8;
-    px = lx + 20; py = ly + 20; pz = lz + 15;
-    cam.fov = 42; rate = 4;
-  }
+  const dir = sp > 4 && c.f > 2 ? Math.atan2(c.vy, c.vx) : c.ang;
+  c.camYaw += wrapAng(dir - c.camYaw) * (1 - Math.exp(-3 * dt));
+  const ch = Math.cos(c.camYaw), sh = Math.sin(c.camYaw), rate = 8;
+  // Derrière la voiture, décalée un peu vers la droite (vecteur droite = (-sh, ch))
+  const px = c.x - ch * 11 - sh * CAM_RIGHT, py = c.y - sh * 11 + ch * CAM_RIGHT, pz = c.z * 0.6 + 4.8;
+  const lx = c.x + ch * 6 - sh * 0.8, ly = c.y + sh * 6 + ch * 0.8, lz = c.z * 0.7 + 1.2;
   if (!c.camPos) { c.camPos = new THREE.Vector3(px, pz, py); c.camLook.set(lx, lz, ly); }
   const k = 1 - Math.exp(-rate * dt);
   c.camPos.x = lerp(c.camPos.x, px, k); c.camPos.y = lerp(c.camPos.y, pz, k); c.camPos.z = lerp(c.camPos.z, py, k);
   c.camLook.x = lerp(c.camLook.x, lx, k * 1.5); c.camLook.y = lerp(c.camLook.y, lz, k * 1.5); c.camLook.z = lerp(c.camLook.z, ly, k * 1.5);
   c.shake *= Math.exp(-6 * dt);
-  const sh = c.shake * 0.5;
-  cam.position.set(c.camPos.x + (Math.random() - 0.5) * sh, Math.max(1.5, c.camPos.y + (Math.random() - 0.5) * sh), c.camPos.z + (Math.random() - 0.5) * sh);
+  const sk = c.shake * 0.5;
+  cam.position.set(c.camPos.x + (Math.random() - 0.5) * sk, Math.max(1.5, c.camPos.y + (Math.random() - 0.5) * sk), c.camPos.z + (Math.random() - 0.5) * sk);
   cam.lookAt(c.camLook);
   cam.aspect = aspect; cam.updateProjectionMatrix();
 }
@@ -902,7 +888,7 @@ const MAP = (() => {
 function roundRect(g, x, y, w, h, r) { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
 function drawMinimap(vx, vw) {
   const g = hctx, size = Math.min(140, vw * 0.28), x = vx + vw - size - 12, y = 56, pad = 8;
-  // Même orientation que la vue 3/4 : la caméra est du côté +x +y, on tourne la carte de 45° pour coller à l'écran
+  // Carte tournée de 45° et aplatie, façon vue isométrique
   const tf = (px, py) => { const u = (px - MAP.x0) / MAP.span - 0.5, v = (py - MAP.y0) / MAP.span - 0.5;
     const r = (size - 2 * pad) * 0.55; return [x + size / 2 + (u - v) * r, y + size / 2 + (u + v) * r * 0.7]; };
   g.fillStyle = 'rgba(0,0,0,.35)'; roundRect(g, x, y, size, size, 10); g.fill();
@@ -984,14 +970,11 @@ function showResults() {
 function updateMenuLabels() {
   $('bCpu').textContent = opt.cpu ? 'Adversaires ordinateur : oui' : 'Adversaires ordinateur : non';
   $('bLaps').textContent = `Tours : ${opt.laps}`;
-  $('bCam').textContent = opt.cam === 'iso' ? 'Caméra : 3/4 suivie' : 'Caméra : derrière la voiture';
 }
 $('b1').onclick = () => { opt.players = 1; startRace(); };
 $('b2').onclick = () => { opt.players = 2; startRace(); };
 $('bCpu').onclick = () => { opt.cpu = !opt.cpu; updateMenuLabels(); };
 $('bLaps').onclick = () => { opt.laps = opt.laps === 3 ? 5 : opt.laps === 5 ? 8 : 3; updateMenuLabels(); };
-$('bCam').onclick = toggleCam;
-$('cam').onclick = toggleCam;
 $('bAgain').onclick = startRace;
 $('bMenu').onclick = showMenu;
 $('mute').onclick = () => setMuted(!muted);
