@@ -113,7 +113,8 @@ const BOOST_TIME = 1.3, BOOST_V = 1.4, MAX_NITRO = 6, START_NITRO = 3;
 const HL = 1.65, HW = 0.92, INV_I = 12 / ((2 * HL) ** 2 + (2 * HW) ** 2);
 const E_CAR = 0.35, MU_CAR = 0.4, E_WALL = 0.3, MU_WALL = 0.35;
 const MAX_SPIN = 7;          // rad/s : limite la toupie après un gros choc
-const LOC_WIN = 40;          // fenêtre de recherche locale sur la ligne centrale
+const LOC_WIN = 40;
+const CAM_RIGHT = 2.6;        // décalage latéral de la caméra de poursuite          // fenêtre de recherche locale sur la ligne centrale
 
 const COLORS = [
   { name: 'Joueur 1', col: 0xe23a2c, css: '#e23a2c' },
@@ -619,7 +620,7 @@ function humanInput(p, solo) {
 
 // ---------- Voitures : physique ----------
 let cars = [], pickups = [], state = 'menu', raceTime = 0, countdown = 0, finishCount = 0, endTimer = 0, pickupTimer = 0;
-let opt = { players: 1, cpu: true, laps: 3, cam: 'iso' };
+let opt = { players: 1, cpu: true, laps: 3, cam: 'chase' };
 
 function makeCar(slot, human, gridPos) {
   const s = LEN - 7 - Math.floor(gridPos / 2) * 7.5, lane = gridPos % 2 ? -3.2 : 3.2;
@@ -863,8 +864,9 @@ function updateCamera(c, dt, aspect) {
     const dir = sp > 4 && c.f > 2 ? Math.atan2(c.vy, c.vx) : c.ang;
     c.camYaw += wrapAng(dir - c.camYaw) * (1 - Math.exp(-3 * dt));
     const ch = Math.cos(c.camYaw), sh = Math.sin(c.camYaw);
-    px = c.x - ch * 11; py = c.y - sh * 11; pz = c.z * 0.6 + 4.8;
-    lx = c.x + ch * 6; ly = c.y + sh * 6; lz = c.z * 0.7 + 1.2;
+    // Derrière la voiture, décalée un peu vers la droite (vecteur droite = (-sh, ch))
+    px = c.x - ch * 11 - sh * CAM_RIGHT; py = c.y - sh * 11 + ch * CAM_RIGHT; pz = c.z * 0.6 + 4.8;
+    lx = c.x + ch * 6 - sh * 0.8; ly = c.y + sh * 6 + ch * 0.8; lz = c.z * 0.7 + 1.2;
     cam.fov = 66; rate = 8;
   } else {
     // Vue 3/4 basse qui suit la voiture, regardant un peu devant elle
