@@ -112,7 +112,11 @@ const HL = 1.65, HW = 0.92, INV_I = 12 / ((2 * HL) ** 2 + (2 * HW) ** 2);
 const E_CAR = 0.35, MU_CAR = 0.4, E_WALL = 0.3, MU_WALL = 0.35;
 const MAX_SPIN = 7;          // rad/s : limite la toupie après un gros choc
 const LOC_WIN = 40;          // fenêtre de recherche locale sur la ligne centrale
-const CAM_RIGHT = 2.6;       // décalage latéral de la caméra de poursuite
+const CAM_RIGHT = 2.6;
+const UNSTICK_TIME = 1.0;     // s sans avancer avant qu'une IA tente une marche arrière
+const UNSTICK_TRIES = 3;     // tentatives avant de replacer l'IA sur la piste
+const HUMAN_RESPAWN = 6;     // s sans avancer avant de replacer un joueur bloqué
+const GHOST_TIME = 2;        // s sans collision après un replacement       // décalage latéral de la caméra de poursuite
 
 const COLORS = [
   { name: 'Joueur 1', col: 0xe23a2c, css: '#e23a2c' },
@@ -626,7 +630,8 @@ function makeCar(slot, human, gridPos) {
     slot, human, ...COLORS[slot], x: PX[i] + NX[i] * lane, y: PY[i] + NY[i] * lane, z: 0, vz: 0, lastRise: 0, air: false,
     ang: Math.atan2(TY[i], TX[i]), w: 0, vx: 0, vy: 0, f: 0, lat: 0, idx: i, lap: -1, lastLap: -1, prog: 0, done: false, place: 0, time: 0,
     nitro: START_NITRO, boost: 0, nitroHeld: false, mud: false, skill: human ? 1 : [0.86, 0.9, 0.93][gridPos % 3],
-    lane: (Math.random() * 2 - 1) * 3.5, laneT: 0, stuck: 0, reverse: 0, engine: null,
+    lane: (Math.random() * 2 - 1) * 3.5, laneT: 0, reverse: 0, revSteer: 1, engine: null, d: lane,
+    bestProg: -1e9, noProg: 0, tries: 0, ghost: 0,
     pitch: 0, roll: 0, steerVis: 0, wheelRot: 0, shake: 0, skidT: 0,
   };
   c.mesh = makeCarMesh(c);
@@ -639,13 +644,23 @@ function makeCar(slot, human, gridPos) {
 
 function aiInput(c) {
   if ((c.laneT -= STEP) < 0) { c.laneT = 2 + Math.random() * 3; c.lane = (Math.random() * 2 - 1) * 3.5; }
+  // Évitement : une voiture juste devant → on change de file
+  const hx = Math.cos(c.ang), hy = Math.sin(c.ang);
+  for (const o of cars) {
+    if (o === c || o.ghost > 0) continue;
+    const dx = o.x - c.x, dy = o.y - c.y, ahead = dx * hx + dy * hy, side = -dx * hy + dy * hx;
+    if (ahead > 0 && ahead < 10 && Math.abs(side) < 2.6) { c.lane = clamp(c.d - Math.sign(side || 1) * 3.5, -HALF_W + 2, HALF_W - 2); c.laneT = 1; break; }
+  }
   const look = Math.round((7 + Math.abs(c.f) * 0.4) / SP), k = (c.idx + look) % N;
   const tx = PX[k] + NX[k] * c.lane, ty = PY[k] + NY[k] * c.lane;
   const diff = wrapAng(Math.atan2(ty - c.y, tx - c.x) - c.ang);
-  let steer = clamp(diff * 2.5, -1, 1), thr = 1;
+  if (c.reverse > 0) { c.reverse -= STEP; return { thr: -1, steer: c.tries % 2 ? -Math.sign(diff) : c.revSteer, nitro: false }; }
+  // Freinage avant les virages serrés
+  const k2 = (c.idx + Math.round(18 / SP)) % N;
+  const bend = Math.abs(wrapAng(Math.atan2(TY[k2], TX[k2]) - Math.atan2(TY[c.idx], TX[c.idx])));
+  const vCurve = MAX_V * c.skill * clamp(1.15 - bend * 0.55, 0.45, 1);
+  let steer = clamp(diff * 2.5, -1, 1), thr = c.f > vCurve + 3 ? -1 : c.f > vCurve ? 0 : 1;
   if (Math.abs(diff) > 0.7 && c.f > 14) thr = 0;
-  if (c.reverse > 0) { c.reverse -= STEP; return { thr: -1, steer: -Math.sign(diff), nitro: false }; }
-  if (!c.air && Math.abs(c.f) < 2 && state === 'race') { if ((c.stuck += STEP) > 1.2) { c.stuck = 0; c.reverse = 0.9; } } else c.stuck = 0;
   const nitro = c.nitro > 0 && Math.abs(diff) < 0.08 && c.f > 20 && Math.random() < 0.004;
   return { thr, steer, nitro };
 }
@@ -698,12 +713,43 @@ function updateCar(c, inp, dt) {
   // Progression / tours
   const di = L1.i - c.idx;
   if (di < -N / 2) c.lap++; else if (di > N / 2) c.lap--;
-  c.idx = L1.i; c.prog = c.lap * N + c.idx;
+  c.idx = L1.i; c.prog = c.lap * N + c.idx; c.d = L1.d;
+  if (c.ghost > 0) c.ghost -= dt;
   if (!c.done && c.lap >= opt.laps && state === 'race') {
     c.done = true; c.place = ++finishCount; c.time = raceTime;
     if (c.human) { tone(523, 0.15, 'square', 0.15); setTimeout(() => tone(784, 0.3, 'square', 0.15), 150); }
   } else if (c.lap > c.lastLap && c.lap > 0 && c.lap < opt.laps && c.human) tone(880, 0.12, 'triangle', 0.15);
   c.lastLap = Math.max(c.lastLap, c.lap);
+}
+
+// ---------- Anti-blocage ----------
+// On surveille la progression réelle sur le circuit (pas la vitesse : une voiture qui pousse un mur « roule » sans avancer)
+function watchdog(c, dt) {
+  if (c.done || state !== 'race') return;
+  if (c.prog > c.bestProg + 6) { c.bestProg = c.prog; c.noProg = 0; c.tries = 0; return; }
+  c.noProg += dt;
+  if (c.human) { if (c.noProg > HUMAN_RESPAWN) respawn(c); return; }
+  if (c.noProg > UNSTICK_TIME && c.reverse <= 0) {
+    if (++c.tries > UNSTICK_TRIES) { respawn(c); return; }
+    // Durée et braquage aléatoires pour que deux IA coincées ne reculent pas en miroir
+    c.noProg = 0; c.reverse = 0.5 + Math.random() * 0.7; c.revSteer = Math.random() < 0.5 ? -1 : 1;
+  }
+}
+// Replace la voiture un peu en arrière, au sol, sur la file la plus dégagée, en fantôme quelques instants
+function respawn(c) {
+  let i = (c.idx - Math.round(4 / SP) + N) % N;
+  for (let k = 0; k < 80 && groundH(i * SP) > 0; k++) i = (i - 1 + N) % N;
+  if (i > c.idx + N / 2) c.lap--; else if (i < c.idx - N / 2) c.lap++;
+  let lane = 0, room = -1;
+  for (const l of [0, -3.5, 3.5]) {
+    const x = PX[i] + NX[i] * l, y = PY[i] + NY[i] * l;
+    const r = Math.min(99, ...cars.filter(o => o !== c).map(o => Math.hypot(o.x - x, o.y - y)));
+    if (r > room) { room = r; lane = l; }
+  }
+  Object.assign(c, { x: PX[i] + NX[i] * lane, y: PY[i] + NY[i] * lane, z: 0, vx: 0, vy: 0, vz: 0, w: 0, f: 0, lat: 0, air: false, lastRise: 0,
+    ang: Math.atan2(TY[i], TX[i]), idx: i, d: lane, reverse: 0, noProg: 0, tries: 0, ghost: GHOST_TIME, lane });
+  c.prog = c.lap * N + i; c.bestProg = c.prog;
+  if (c.camPos) c.camYaw = c.ang;
 }
 
 // ---------- Collisions de corps rigides (voitures rectangulaires qui pivotent) ----------
@@ -762,6 +808,7 @@ function collideCars() {
   for (let i = 0; i < cars.length; i++) for (let k = i + 1; k < cars.length; k++) {
     const a = cars[i], b = cars[k];
     if (Math.abs(a.z - b.z) > 1.2) continue; // on peut sauter par-dessus !
+    if (a.ghost > 0 || b.ghost > 0) continue;
     if ((a.x - b.x) ** 2 + (a.y - b.y) ** 2 > 16) continue;
     let best = null;
     for (const [px, py] of corners(a)) { const r = cornerIn(px, py, b); if (r && (!best || r.pen > best.pen)) best = { pen: r.pen, px, py, nx: -r.nx, ny: -r.ny }; }
@@ -842,6 +889,7 @@ function syncCar(c, dt) {
   c.pitch = lerp(c.pitch, pt, 1 - Math.exp(-(c.air ? 4 : 14) * dt));
   c.roll = lerp(c.roll, clamp(-c.lat * 0.012 - c.w * c.f * 0.002, -0.12, 0.12), 1 - Math.exp(-8 * dt));
   c.wheelRot -= c.f * dt / 0.5;
+  m.root.visible = !(c.ghost > 0 && Math.floor(clock * 12) % 2);
   m.root.position.set(c.x, c.z + SURF, c.y);
   m.root.rotation.y = -c.ang;
   m.body.rotation.set(c.roll, 0, c.pitch);
@@ -995,6 +1043,7 @@ function update(dt) {
     if (c.done && c.human) { inp.thr *= 0.6; inp.nitro = false; }
     c.lastInp = inp;
     updateCar(c, inp, dt);
+    watchdog(c, dt);
   }
   for (let pass = 0; pass < 2; pass++) { collideCars(); for (const c of cars) collideWalls(c); }
   updateParticles(dt);
