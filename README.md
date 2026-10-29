@@ -5,7 +5,7 @@ Petit jeu de course tout-terrain en 3D (three.js), jouable à 1 ou 2 joueurs en 
 **Jouer :** https://bdubuisson.github.io/rallye-poussiere/
 
 ## Commandes
-- **Joueur 1 (rouge)** : Z Q S D (W A S D en QWERTY) + nitro Maj gauche
+- **Joueur 1 (rouge)** : Z Q S D en AZERTY ou W A S D en QWERTY (mêmes touches physiques) + nitro Maj/Shift gauche ou Espace
 - **Joueur 2 (bleu)** : flèches + nitro Entrée
 - Manettes : A = gaz, B = frein, X/RB = nitro
 - Tablette : accélération automatique, ◀ ▶ pour tourner, les deux ensemble pour reculer, 🔥 = nitro
