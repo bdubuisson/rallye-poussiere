@@ -108,7 +108,7 @@ const ACC = 26, BRAKE = 44, REV_ACC = 14, MAX_V = 34, MAX_REV = 11, TURN = 2.7;
 const GRIP = 6, MUD_GRIP = 2.2, MUD_SLOW = 0.55, YAW_GRIP = 7, MUD_YAW_GRIP = 3;
 const BOOST_TIME = 1.3, BOOST_V = 1.4, MAX_NITRO = 6, START_NITRO = 3;
 // Carrosserie : demi-longueur / demi-largeur, inertie d'un rectangle de masse 1
-const HL = 1.65, HW = 0.92, INV_I = 12 / ((2 * HL) ** 2 + (2 * HW) ** 2);
+const HL = 1.72, HW = 1.22, INV_I = 12 / ((2 * HL) ** 2 + (2 * HW) ** 2);
 const E_CAR = 0.35, MU_CAR = 0.4, E_WALL = 0.3, MU_WALL = 0.35;
 const MAX_SPIN = 7;          // rad/s : limite la toupie après un gros choc
 const LOC_WIN = 40;          // fenêtre de recherche locale sur la ligne centrale
@@ -714,7 +714,7 @@ function updateCar(c, inp, dt) {
   const di = L1.i - c.idx;
   if (di < -N / 2) c.lap++; else if (di > N / 2) c.lap--;
   c.idx = L1.i; c.prog = c.lap * N + c.idx; c.d = L1.d;
-  if (c.ghost > 0) c.ghost -= dt;
+  if (c.ghost > 0 && !cars.some(o => o !== c && Math.abs(o.z - c.z) < 1.2 && overlap(c, o))) c.ghost -= dt; // reste fantôme tant qu'il chevauche
   if (!c.done && c.lap >= opt.laps && state === 'race') {
     c.done = true; c.place = ++finishCount; c.time = raceTime;
     if (c.human) { tone(523, 0.15, 'square', 0.15); setTimeout(() => tone(784, 0.3, 'square', 0.15), 150); }
@@ -757,14 +757,6 @@ function corners(c) {
   const ca = Math.cos(c.ang), sa = Math.sin(c.ang);
   return [[HL, HW], [HL, -HW], [-HL, HW], [-HL, -HW]].map(([a, b]) => [c.x + a * ca - b * sa, c.y + a * sa + b * ca]);
 }
-// Un coin (px, py) est-il dans la caisse b ? Renvoie la pénétration et la normale sortant de b.
-function cornerIn(px, py, b) {
-  const ca = Math.cos(b.ang), sa = Math.sin(b.ang), dx = px - b.x, dy = py - b.y;
-  const lx = dx * ca + dy * sa, ly = -dx * sa + dy * ca;
-  if (Math.abs(lx) >= HL || Math.abs(ly) >= HW) return null;
-  const penX = HL - Math.abs(lx), penY = HW - Math.abs(ly);
-  return penX < penY ? { pen: penX, nx: Math.sign(lx) * ca, ny: Math.sign(lx) * sa } : { pen: penY, nx: -Math.sign(ly) * sa, ny: Math.sign(ly) * ca };
-}
 function applyImpulse(c, ix, iy, rx, ry) { c.vx += ix; c.vy += iy; c.w = clamp(c.w + (rx * iy - ry * ix) * INV_I, -MAX_SPIN, MAX_SPIN); }
 // Impulsion au point de contact (normale de a vers b) ; b = null pour un muret immobile
 function resolve(a, b, px, py, nx, ny, pen, e, mu) {
@@ -795,14 +787,41 @@ function impactFx(c, j, px, py) {
   sparks(px, py, c.z + 0.6, Math.min(12, j | 0));
   for (const k of [c]) if (k.human) k.shake = Math.min(1, k.shake + j * 0.03);
 }
+// Coins + milieux des flancs : un muret courbe ne doit pas passer entre deux coins
+function wallPoints(c) {
+  const ca = Math.cos(c.ang), sa = Math.sin(c.ang);
+  return [[HL, HW], [HL, -HW], [-HL, HW], [-HL, -HW], [0, HW], [0, -HW], [HL, 0], [-HL, 0]]
+    .map(([a, b]) => [c.x + a * ca - b * sa, c.y + a * sa + b * ca]);
+}
 function collideWalls(c) {
-  const lim = HALF_W - 0.05;
-  for (const [px, py] of corners(c)) {
+  const lim = HALF_W - 0.1;
+  for (const [px, py] of wallPoints(c)) {
     const L = locateNear(px, py, c.idx);
     if (Math.abs(L.d) <= lim) continue;
     const sg = Math.sign(L.d), j = resolve(c, null, px, py, L.nx * sg, L.ny * sg, Math.abs(L.d) - lim, E_WALL, MU_WALL);
     impactFx(c, j, px, py);
   }
+}
+// Séparation par axes (4 axes des deux caisses) : détecte tout chevauchement, même en croix.
+// Renvoie la pénétration minimale, la normale de a vers b et le coin le plus enfoncé.
+function overlap(a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  if (dx * dx + dy * dy > 16) return null;
+  let best = null;
+  for (const [o, ang] of [[a, a.ang], [a, a.ang + Math.PI / 2], [b, b.ang], [b, b.ang + Math.PI / 2]]) {
+    const ux = Math.cos(ang), uy = Math.sin(ang);
+    const ra = HL * Math.abs(Math.cos(a.ang - ang)) + HW * Math.abs(Math.sin(a.ang - ang));
+    const rb = HL * Math.abs(Math.cos(b.ang - ang)) + HW * Math.abs(Math.sin(b.ang - ang));
+    const dist = dx * ux + dy * uy, pen = ra + rb - Math.abs(dist);
+    if (pen <= 0) return null;
+    if (!best || pen < best.pen) { const sg = dist < 0 ? -1 : 1; best = { pen, nx: ux * sg, ny: uy * sg, ref: o }; }
+  }
+  // Point de contact : coin de l'autre caisse le plus engagé le long de la normale
+  const inc = best.ref === a ? b : a, dir = best.ref === a ? -1 : 1;
+  let pt = null, m = -Infinity;
+  for (const [px, py] of corners(inc)) { const v = (px * best.nx + py * best.ny) * dir; if (v > m) { m = v; pt = [px, py]; } }
+  best.px = pt[0]; best.py = pt[1];
+  return best;
 }
 function collideCars() {
   for (let i = 0; i < cars.length; i++) for (let k = i + 1; k < cars.length; k++) {
@@ -810,9 +829,7 @@ function collideCars() {
     if (Math.abs(a.z - b.z) > 1.2) continue; // on peut sauter par-dessus !
     if (a.ghost > 0 || b.ghost > 0) continue;
     if ((a.x - b.x) ** 2 + (a.y - b.y) ** 2 > 16) continue;
-    let best = null;
-    for (const [px, py] of corners(a)) { const r = cornerIn(px, py, b); if (r && (!best || r.pen > best.pen)) best = { pen: r.pen, px, py, nx: -r.nx, ny: -r.ny }; }
-    for (const [px, py] of corners(b)) { const r = cornerIn(px, py, a); if (r && (!best || r.pen > best.pen)) best = { pen: r.pen, px, py, nx: r.nx, ny: r.ny }; }
+    const best = overlap(a, b);
     if (!best) continue;
     const j = resolve(a, b, best.px, best.py, best.nx, best.ny, best.pen, E_CAR, MU_CAR);
     impactFx(a, j, best.px, best.py); if (b.human) b.shake = Math.min(1, b.shake + j * 0.03);
@@ -1045,7 +1062,7 @@ function update(dt) {
     updateCar(c, inp, dt);
     watchdog(c, dt);
   }
-  for (let pass = 0; pass < 2; pass++) { collideCars(); for (const c of cars) collideWalls(c); }
+  for (let pass = 0; pass < 3; pass++) { collideCars(); for (const c of cars) collideWalls(c); }
   updateParticles(dt);
   updatePickups(dt);
   if (cars.filter(c => c.human).every(c => c.done) && (endTimer += dt) > 3) showResults();
