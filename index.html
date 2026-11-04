@@ -68,13 +68,14 @@
   <div class="row">
     <button class="alt" id="bCpu"></button>
     <button class="alt" id="bLaps"></button>
+    <button class="alt" id="bCircuit"></button>
   </div>
   <div class="help">
     <b>Joueur 1 (rouge, écran de gauche)</b> : <span class="kbd">Z</span><span class="kbd">Q</span><span class="kbd">S</span><span class="kbd">D</span> (AZERTY) ou <span class="kbd">W</span><span class="kbd">A</span><span class="kbd">S</span><span class="kbd">D</span> (QWERTY) + nitro <span class="kbd">Maj/Shift gauche</span> ou <span class="kbd">Espace</span> + cascade <span class="kbd">E</span><br>
     <b>Joueur 2 (bleu, écran de droite)</b> : <span class="kbd">↑</span><span class="kbd">←</span><span class="kbd">↓</span><span class="kbd">→</span> + nitro <span class="kbd">Entrée</span> + cascade <span class="kbd">Ctrl droit</span> ou <span class="kbd">0</span> du pavé<br>
     En solo, les deux jeux de touches marchent. Manettes reconnues (A = gaz, B = frein, X/RB = nitro, Y/LB = cascade).<br>
     Sur tablette : la voiture accélère toute seule, ◀ ▶ pour tourner, les deux ensemble pour reculer.<br>
-    En l'air, le bouton de cascade fait un salto (ou un tonneau en tournant) : atterris à temps pour gagner une nitro ! Looping : file de gauche pour entrer, gaz à fond, et vise le bidon tout en haut. File de droite ou tremplin pris à l'envers : éjection !<br>
+    En l'air, le bouton de cascade fait un salto (ou un tonneau en tournant) : atterris à temps pour gagner une nitro ! Nitro juste au bout d'un tremplin : <b>super-saut</b> très haut ! Atterris sur la réception, sinon c'est le trou. Circuit 2 : monte sur les ponts avec le tremplin ou la catapulte, c'est plus rapide qu'en bas. Looping : file de gauche pour entrer, gaz à fond, et vise le bidon tout en haut.<br>
     Ramasse les bidons verts pour gagner des nitros ! <span class="kbd">M</span> = son, <span class="kbd">Échap</span> = menu.
   </div>
 </div>
@@ -114,8 +115,11 @@ const LOOP_CAM_BEHIND = 0.6, LOOP_CAM_IN = 2.6, LOOP_CAM_AHEAD = 0.35; // camér
 const LOOP_LIFT = 0.28, LOOP_LIFT_IN = 0.6;
 const LOOP_G = GRAV * 0.5, LOOP_STEER = 5, LOOP_OFF_MAX = 1.95, LOOP_STALL = 3, LOOP_BOOST = 0.8, LOOP_GAP = 3.4, LOOP_CAN_W = 1.6;
 const LOOP_ENTRY_LAT = 0.3, LOOP_EJECT_VZ = 45; // à droite de cette file, on heurte le pied de la bande et on est éjecté
-const RAMP_EDGE = 0.5, BACK_MIN_V = 3, BACK_VZ = 130; // tremplin pris par l'arrière : éjection vers le ciel
-const CATA_LEN = 5, CATA_HW = 3, CATA_VZ = 40, CATA_ANIM = 0.5;
+const RAMP_EDGE = 0.5, RAMP_RUNUP = 45; // l'IA reste pleins gaz sur cette distance avant un tremplin
+const SUPER_VZ = 110, SUPER_WINDOW = 0.2, SUPER_AFTER = 0.12, LIP_ZONE = 2; // super-saut : nitro juste avant (ou juste après) le haut du tremplin
+const LAND_BOOST = 0.5, PIT_TIME = 1.6, PIT_SINK = 6, PIT_BACK = 12, PIT_V = 15; // réception réussie ; trou : durée, chute, recul, vitesse de reprise
+const DECK_TOL = 0.6, CAR_H = 1.6, DECK_CAN_RESPAWN = 6; // ponts : marge pour atterrir dessus, hauteur de la voiture sous le tablier
+const CATA_LEN = 5, CATA_HW = 3, CATA_VZ = 40, CATA_ANIM = 0.5, CATA_MIN_V = 6; // à l'arrêt la plaque ne se déclenche pas : pas de rebonds sur place
 const HIGH_CAM_UP = 10, HIGH_CAM_DOWN = 3;
 const HIGH_Z = 8, TRICK_TIME = 0.5, FLIP = 2 * Math.PI;
 const POT_X = [-0.4, 0, 0.4], POT_Z = 0.86; // pots d'échappement latéraux (décor)
@@ -140,8 +144,32 @@ const COLORS = [
 ];
 
 // ---------- Circuit ----------
-const CTRL = [[50,10],[84,12],[92,32],[78,44],[70,56],[84,68],[86,88],[56,92],[30,86],[38,68],[22,56],[10,36],[14,14]]
-  .map(p => [p[0] * SCALE, p[1] * SCALE]);
+// Tremplin : [s0, longueur, hauteur, côté (optionnel : -1 ou 1 = moitié de piste)]
+// Saut avec réception : [s0, longueur, hauteur, vide, longueur de réception, hauteur de réception]
+// Pont : niveau du haut, juste au-dessus de la piste, entre s0 et s1
+const CIRCUITS = [
+  { name: 'Désert', scale: SCALE,
+    ctrl: [[50,10],[84,12],[92,32],[78,44],[70,56],[84,68],[86,88],[56,92],[30,86],[38,68],[22,56],[10,36],[14,14]],
+    ramps: [[42, 6, 1.6], [97, 5, 1.2], [166, 5, 1.2], [189, 6, 1.6]],
+    jumps: [[313, 6, 1.5, 8, 18, 2.4], [424, 8, 2, 6, 18, 2.6]],
+    loops: [30, 236, 365],
+    catapults: [[72, 3.2], [148, -3.2], [252, 3.2], [379, -1]],
+    bumps: [{ s0: 176, len: 9.6, amp: 0.75, wave: 4.8 }, { s0: 381, len: 19.2, amp: 0.65, wave: 4.8 }],
+    muds: [{ s: 138, off: -2, r: 5 }, { s: 352, off: 0.8, r: 4.5 }, { s: 93, off: 3, r: 3.6 }],
+    decks: [], cans: [] },
+  { name: 'Les Ponts', scale: 1.3,
+    ctrl: [[30,8],[60,8],[90,8],[120,8],[138,22],[140,50],[140,80],[140,110],[126,132],[100,136],[70,136],[40,136],[14,132],[2,110],[2,80],[2,50],[6,22],[14,8]],
+    ramps: [[312, 9, 4, -1]],
+    jumps: [[8, 8, 2, 10, 24, 2.6], [484, 8, 2, 10, 24, 2.6]],
+    loops: [66, 548],
+    catapults: [[158, 3.2, 24]],
+    bumps: [{ s0: 182, len: 14.4, amp: 0.7, wave: 4.8 }, { s0: 345, len: 14.4, amp: 0.7, wave: 4.8 }],
+    muds: [{ s: 205, off: -3, r: 4 }, { s: 375, off: 3, r: 4 }],
+    decks: [{ s0: 170, s1: 228, h: 6 }, { s0: 328, s1: 402, h: 6 }],
+    cans: [[205, 3], [215, -3], [355, -3], [385, 3]] },
+];
+const CIRCUIT_ID = clamp((+new URLSearchParams(location.search).get('circuit') || 1) - 1, 0, CIRCUITS.length - 1), CIRCUIT = CIRCUITS[CIRCUIT_ID];
+const CTRL = CIRCUIT.ctrl.map(p => [p[0] * CIRCUIT.scale, p[1] * CIRCUIT.scale]);
 let N, SP, LEN, PX, PY, TX, TY, NX, NY;
 
 const smooth = t => { t = clamp(t, 0, 1); return t * t * (3 - 2 * t); };
@@ -185,18 +213,23 @@ function buildTrack() {
 buildTrack();
 
 // Éléments placés le long de la piste (s = distance depuis la ligne de départ)
-const RAMPS = [[42, 6, 1.6], [97, 5, 1.2], [166, 5, 1.2], [189, 6, 1.6], [313, 6, 1.8], [401, 6, 1.6], [424, 8, 2.8]]
-  .map(([s0, len, h]) => ({ s0, len, h }));
+const RAMPS = CIRCUIT.ramps.map(([s0, len, h, side]) => ({ s0, len, h, side: side || 0, down: false })), GAPS = [];
+for (const [s0, len, h, gap, lenL, hL] of CIRCUIT.jumps) {
+  RAMPS.push({ s0, len, h, side: 0, down: false }, { s0: s0 + len + gap, len: lenL, h: hL, side: 0, down: true });
+  GAPS.push({ s0: s0 + len, s1: s0 + len + gap, ramp: s0 });
+}
 // Loopings : repère droit posé sur la tangente de la piste au point s0
-const LOOPS = [30, 236, 365].map((s0, n) => {
+const LOOPS = CIRCUIT.loops.map((s0, n) => {
   const i = Math.round(s0 / SP);
   return { s0, canOff: n % 2 ? 1.3 : -1.3, x: PX[i], y: PY[i], tx: TX[i], ty: TY[i], nx: NX[i], ny: NY[i], ang: Math.atan2(TY[i], TX[i]) };
 });
 const inLoopZone = s => LOOPS.some(L => s > L.s0 - LOOP_FOOT && s < L.s0 + LOOP_FOOT);
 // Catapultes : plaques sur une moitié de piste, on choisit d'y aller ou non
-const CATAPULTS = [[72, 3.2], [148, -3.2], [252, 3.2], [379, -1]].map(([s0, off]) => ({ s0, off, t: 0, arm: null }));
-const BUMPS = [{ s0: 176, len: 9.6, amp: 0.75, wave: 4.8 }, { s0: 381, len: 19.2, amp: 0.65, wave: 4.8 }];
-const MUDS = [{ s: 138, off: -2, r: 5 }, { s: 326, off: 0.8, r: 5.2 }, { s: 93, off: 3, r: 3.6 }].map(m => {
+const CATAPULTS = CIRCUIT.catapults.map(([s0, off, vz]) => ({ s0, off, vz: vz || CATA_VZ, t: 0, arm: null }));
+// L'IA choisit de prendre ou non ces passages sur une moitié de piste
+const LANE_CHOICES = [...RAMPS.filter(r => r.side).map(r => ({ s0: r.s0, off: r.side * 3.5 })), ...CATAPULTS.map(p => ({ s0: p.s0, off: p.off }))];
+const BUMPS = CIRCUIT.bumps, DECKS = CIRCUIT.decks;
+const MUDS = CIRCUIT.muds.map(m => {
   const i = Math.round(m.s / SP) % N; return { x: PX[i] + NX[i] * m.off, y: PY[i] + NY[i] * m.off, r: m.r };
 });
 const CENTER = (() => { let x = 0, y = 0; for (let i = 0; i < N; i++) { x += PX[i]; y += PY[i]; } return [x / N, y / N]; })();
@@ -226,10 +259,25 @@ function bumpH(s) {
   for (const b of BUMPS) { const u = s - b.s0; if (u >= 0 && u < b.len) return b.amp * (0.5 - 0.5 * Math.cos(2 * Math.PI * u / b.wave)); }
   return 0;
 }
-function groundH(s) {
+// d : position latérale ; sans d, les tremplins sur une moitié de piste sont ignorés (décor)
+function groundH(s, d) {
   s = ((s % LEN) + LEN) % LEN;
-  for (const r of RAMPS) { const u = s - r.s0; if (u >= 0 && u < r.len) return r.h * u / r.len; }
+  for (const r of RAMPS) {
+    const u = s - r.s0;
+    if (u < 0 || u >= r.len || (r.side && !(d * r.side > 0))) continue;
+    return r.h * (r.down ? 1 - u / r.len : u / r.len);
+  }
   return bumpH(s);
+}
+const wrapS = s => ((s % LEN) + LEN) % LEN;
+const gapAt = s => { s = wrapS(s); return GAPS.find(g => s >= g.s0 && s < g.s1); };
+const deckAt = s => { s = wrapS(s); return DECKS.find(k => s >= k.s0 && s < k.s1); };
+const onDownRamp = s => { s = wrapS(s); return RAMPS.some(r => r.down && s >= r.s0 && s < r.s0 + r.len); };
+const atLip = s => { s = wrapS(s); return RAMPS.some(r => !r.down && Math.abs(s - r.s0 - r.len) < LIP_ZONE); };
+// Sol sous la voiture : le pont si elle est à sa hauteur, sinon la piste du bas
+function surfaceH(c, s, d) {
+  const k = deckAt(s);
+  return k && c.z >= k.h - DECK_TOL ? k.h : groundH(s, d);
 }
 const inMud = (x, y) => MUDS.some(m => (x - m.x) ** 2 + (y - m.y) ** 2 < m.r * m.r);
 
@@ -339,7 +387,11 @@ for (const m of MUDS) {
     for (let i = 1; i <= N; i++) {
       const k = i % N, qx = PX[k] + NX[k] * w * sgn, qy = PY[k] + NY[k] * w * sgn, l = Math.hypot(qx - px, qy - py);
       acc += l;
-      if (acc >= 1.1) { acc = 0; spots.push([qx, qy, groundH(i * SP), (n++ / 3 | 0) % 2]); }
+      if (acc >= 1.1) {
+        acc = 0; const col = (n++ / 3 | 0) % 2, k = deckAt(i * SP);
+        spots.push([qx, qy, groundH(i * SP), col]);
+        if (k) spots.push([qx, qy, k.h, col]);
+      }
       px = qx; py = qy;
     }
   }
@@ -358,15 +410,18 @@ for (const m of MUDS) {
 // Tremplins en bois
 function buildRamp(r) {
   const i0 = Math.round(r.s0 / SP), i1 = Math.round((r.s0 + r.len) / SP), w = HALF_W - 0.05;
-  const P = (i, side, z) => { const k = i % N; return [PX[k] + NX[k] * w * side, z + SURF, PY[k] + NY[k] * w * side]; };
-  const h = i => r.h * clamp((i * SP - r.s0) / r.len, 0, 1);
+  // Sur une moitié de piste : de l'axe jusqu'au bord
+  const latL = r.side > 0 ? 0 : -w, latR = r.side < 0 ? 0 : w;
+  const P = (i, side, z) => { const k = i % N, lat = side < 0 ? latL : latR; return [PX[k] + NX[k] * lat, z + SURF, PY[k] + NY[k] * lat]; };
+  const h = i => { const t = clamp((i * SP - r.s0) / r.len, 0, 1); return r.h * (r.down ? 1 - t : t); };
   const pos = [], quad = (a, b, c, d) => pos.push(...a, ...b, ...c, ...a, ...c, ...d);
   for (let i = i0; i < i1; i++) {
     quad(P(i, -1, h(i)), P(i + 1, -1, h(i + 1)), P(i + 1, 1, h(i + 1)), P(i, 1, h(i)));        // dessus
     quad(P(i, 1, 0), P(i, 1, h(i)), P(i + 1, 1, h(i + 1)), P(i + 1, 1, 0));                    // flanc
     quad(P(i, -1, 0), P(i + 1, -1, 0), P(i + 1, -1, h(i + 1)), P(i, -1, h(i)));                // flanc
   }
-  quad(P(i1, -1, 0), P(i1, 1, 0), P(i1, 1, h(i1)), P(i1, -1, h(i1)));                        // face arrière
+  const top = r.down ? i0 : i1;
+  quad(P(top, -1, 0), P(top, 1, 0), P(top, 1, h(top)), P(top, -1, h(top)));                  // face verticale
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   geo.computeVertexNormals();
@@ -375,13 +430,50 @@ function buildRamp(r) {
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   const mesh = new THREE.Mesh(geo, lambert(0xffffff, { map: tex, side: THREE.DoubleSide }));
   scene.add(shadowy(mesh));
-  // Bande jaune et noire sur la lèvre
-  const k = i1 % N, lip = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.12, 2 * w), lambert(0xf2c230));
-  lip.position.set(PX[k] - TX[k] * 0.3, SURF + r.h + 0.02, PY[k] - TY[k] * 0.3); lip.rotation.y = -Math.atan2(TY[k], TX[k]);
-  lip.rotation.z = Math.atan2(r.h, r.len);
+  // Bande jaune sur la lèvre
+  const k = top % N, mid = (latL + latR) / 2, back = r.down ? -0.3 : 0.3;
+  const lip = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.12, latR - latL), lambert(0xf2c230));
+  lip.position.set(PX[k] + NX[k] * mid - TX[k] * back, SURF + r.h + 0.02, PY[k] + NY[k] * mid - TY[k] * back); lip.rotation.y = -Math.atan2(TY[k], TX[k]);
+  lip.rotation.z = Math.atan2(r.h, r.len) * (r.down ? -1 : 1);
   scene.add(lip);
 }
 RAMPS.forEach(buildRamp);
+
+// Bande posée le long de la piste, entre deux abscisses et deux positions latérales
+function stripGeo(i0, i1, latA, latB, y) {
+  const pos = [], uv = [], idx = [];
+  for (let i = i0; i <= i1; i++) {
+    const k = i % N;
+    for (const [lat, u] of [[latA, 0], [latB, 1]]) { pos.push(PX[k] + NX[k] * lat, y, PY[k] + NY[k] * lat); uv.push(u, (i - i0) * SP / 5); }
+    if (i < i1) { const a = (i - i0) * 2; idx.push(a, a + 1, a + 3, a, a + 3, a + 2); }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.setIndex(idx); geo.computeVertexNormals();
+  return geo;
+}
+// Trous entre un tremplin et sa réception
+for (const g of GAPS) {
+  const hole = new THREE.Mesh(stripGeo(Math.round(g.s0 / SP), Math.round(g.s1 / SP), -HALF_W, HALF_W, SURF + 0.03), lambert(0x120c08, { side: THREE.DoubleSide }));
+  scene.add(hole);
+}
+// Ponts : tablier, piliers de part et d'autre de la piste
+for (const k of DECKS) {
+  const i0 = Math.round(k.s0 / SP), i1 = Math.round(k.s1 / SP), w = HALF_W + 1.1;
+  const top = new THREE.Mesh(stripGeo(i0, i1, -w, w, k.h + SURF), lambert(0xb5824f, { side: THREE.DoubleSide }));
+  const under = new THREE.Mesh(stripGeo(i0, i1, -w, w, k.h - 0.4), lambert(0x4a3a2c, { side: THREE.DoubleSide }));
+  scene.add(shadowy(top), shadowy(under));
+  const lipM = lambert(0xf2c230), steel = lambert(0x3b3b44);
+  for (const i of [i0, i1]) {
+    const q = i % N, lip = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 2 * w), lipM);
+    lip.position.set(PX[q], k.h - 0.17, PY[q]); lip.rotation.y = -Math.atan2(TY[q], TX[q]); scene.add(lip);
+  }
+  for (let i = i0; i <= i1; i += Math.round(18 / SP)) for (const sd of [-1, 1]) {
+    const q = i % N, post = new THREE.Mesh(new THREE.BoxGeometry(0.7, k.h, 0.7), steel), lat = (w + 0.4) * sd;
+    post.position.set(PX[q] + NX[q] * lat, k.h / 2, PY[q] + NY[q] * lat); scene.add(shadowy(post));
+  }
+}
 
 // Loopings : bande hélicoïdale (entrée à gauche, sortie à droite), portique et flèches au sol
 function loopPoint(L, th, lat, r) {
@@ -738,7 +830,8 @@ function humanInput(p, solo) {
 
 // ---------- Voitures : physique ----------
 let cars = [], pickups = [], state = 'menu', raceTime = 0, countdown = 0, finishCount = 0, endTimer = 0, pickupTimer = 0;
-let opt = { players: 1, cpu: true, laps: 3 };
+const QUERY = new URLSearchParams(location.search);
+let opt = { players: +QUERY.get('players') || 1, cpu: QUERY.get('cpu') !== '0', laps: +QUERY.get('laps') || 3 };
 
 function makeCar(slot, human, gridPos) {
   const s = LEN - 7 - Math.floor(gridPos / 2) * 7.5, lane = gridPos % 2 ? -3.2 : 3.2;
@@ -747,7 +840,7 @@ function makeCar(slot, human, gridPos) {
     slot, human, ...COLORS[slot], x: PX[i] + NX[i] * lane, y: PY[i] + NY[i] * lane, z: 0, vz: 0, lastRise: 0, air: false,
     ang: Math.atan2(TY[i], TX[i]), w: 0, vx: 0, vy: 0, f: 0, lat: 0, idx: i, lap: -1, lastLap: -1, prog: 0, done: false, place: 0, time: 0,
     nitro: START_NITRO, boost: 0, nitroHeld: false, mud: false, skill: human ? 1 : [0.86, 0.9, 0.93][gridPos % 3],
-    lane: (Math.random() * 2 - 1) * 3.5, laneT: 0, rail: null, trick: null, trickHeld: false, tricks: 0, trickName: '', msg: null, reverse: 0, revSteer: 1, engine: null, d: lane,
+    lane: (Math.random() * 2 - 1) * 3.5, laneT: 0, rail: null, pit: 0, pitGap: null, nitroT: 0, lipT: 0, trick: null, trickHeld: false, tricks: 0, trickName: '', msg: null, reverse: 0, revSteer: 1, engine: null, d: lane,
     bestProg: -1e9, noProg: 0, tries: 0, ghost: 0,
     pitch: 0, roll: 0, steerVis: 0, wheelRot: 0, shake: 0, skidT: 0,
   };
@@ -770,6 +863,10 @@ function aiInput(c) {
   }
   // Avant un looping : file d'entrée
   for (const L of LOOPS) { const ahead = L.s0 - c.idx * SP; if (ahead > -2 && ahead < LOOP_APPROACH) { c.lane = -LOOP_LAT; c.laneT = 0.5; } }
+  for (const q of LANE_CHOICES) {
+    const ahead = q.s0 - c.idx * SP;
+    if (ahead > 0 && ahead < 35) { c.lane = (c.slot + Math.max(c.lap, 0)) % 2 ? -q.off : q.off; c.laneT = 0.5; }
+  }
   const look = Math.round((7 + Math.abs(c.f) * 0.4) / SP), k = (c.idx + look) % N;
   const tx = PX[k] + NX[k] * c.lane, ty = PY[k] + NY[k] * c.lane;
   const diff = wrapAng(Math.atan2(ty - c.y, tx - c.x) - c.ang);
@@ -780,14 +877,19 @@ function aiInput(c) {
   const vCurve = MAX_V * c.skill * clamp(1.15 - bend * 0.55, 0.45, 1);
   let steer = clamp(diff * 2.5, -1, 1), thr = c.f > vCurve + 3 ? -1 : c.f > vCurve ? 0 : 1;
   if (Math.abs(diff) > 0.7 && c.f > 14) thr = 0;
+  // Pleins gaz avant un tremplin : il faut assez de vitesse pour franchir le vide
+  for (const r of RAMPS) { const ahead = r.s0 + r.len - c.idx * SP; if (!r.down && ahead > 0 && ahead < RAMP_RUNUP) thr = 1; }
   const nitro = c.nitro > 0 && Math.abs(diff) < 0.08 && c.f > 20 && Math.random() < 0.004;
   return { thr, steer, nitro, trick: c.air && c.z > 3 && Math.random() < 0.03 };
 }
 
 function handleNitro(c, inp, dt) {
   if (c.boost > 0) c.boost -= dt;
-  if (inp.nitro && !c.nitroHeld && c.nitro > 0 && c.boost <= 0 && state === 'race') {
-    c.nitro--; c.boost = BOOST_TIME; if (c.human) tone(220, 0.5, 'sawtooth', 0.12, 660);
+  if (c.nitroT > 0) c.nitroT -= dt;
+  if (c.lipT > 0) c.lipT -= dt;
+  if (inp.nitro && !c.nitroHeld && c.nitro > 0 && (c.boost <= 0 || c.z > 0.3) && state === 'race') {
+    c.nitro--; c.boost = BOOST_TIME; c.nitroT = SUPER_WINDOW; if (c.human) tone(220, 0.5, 'sawtooth', 0.12, 660);
+    if (c.lipT > 0) superJump(c);
   }
   c.nitroHeld = inp.nitro;
 }
@@ -800,13 +902,31 @@ function endTricks(c) {
   c.tricks = 0;
   if (c.human) tone(660, 0.25, 'triangle', 0.15, 1100);
 }
+// Nitro au bon moment sur le haut d'un tremplin : on part très haut
+function superJump(c) {
+  c.lipT = 0; c.nitroT = 0; launch(c, SUPER_VZ);
+  c.msg = { txt: 'SUPER-SAUT !', t: 1.2 };
+}
+function enterPit(c, gap) {
+  c.pit = PIT_TIME; c.pitGap = gap; c.msg = { txt: 'DANS LE TROU !', t: PIT_TIME };
+  if (c.human) { tone(300, 0.7, 'sawtooth', 0.14, 60); c.shake = 1; }
+}
+function updatePit(c, dt) {
+  c.pit -= dt; c.z -= PIT_SINK * dt;
+  const damp = Math.exp(-5 * dt); c.vx *= damp; c.vy *= damp;
+  c.x += c.vx * dt; c.y += c.vy * dt;
+  if (c.pit > 0) return;
+  c.pit = 0; c.idx = Math.round(c.pitGap.ramp / SP) % N;
+  respawn(c, PIT_BACK);
+  c.f = PIT_V; c.vx = Math.cos(c.ang) * PIT_V; c.vy = Math.sin(c.ang) * PIT_V;
+}
 function launch(c, vz) {
   c.air = true; c.vz = vz; c.lastRise = 0;
   sparks(c.x, c.y, c.z + 0.4, 20);
   if (c.human) { tone(160, 0.6, 'sawtooth', 0.16, 900); c.shake = 1; }
 }
 function updateCar(c, inp, dt) {
-  c.mud = !c.air && inMud(c.x, c.y);
+  c.mud = !c.air && c.z < 1 && inMud(c.x, c.y);
   handleNitro(c, inp, dt);
   c.steerVis = lerp(c.steerVis, inp.steer, 1 - Math.exp(-10 * dt));
   let hx = Math.cos(c.ang), hy = Math.sin(c.ang);
@@ -844,23 +964,29 @@ function updateCar(c, inp, dt) {
   c.x += c.vx * dt; c.y += c.vy * dt;
 
   // Hauteur : rampes, bosses, sauts
-  const L1 = locateNear(c.x, c.y, c.idx), g = groundH(L1.s);
+  const L1 = locateNear(c.x, c.y, c.idx), g = surfaceH(c, L1.s, L1.d), deck = deckAt(L1.s);
   if (c.air) {
     c.vz -= GRAV * dt; c.z += c.vz * dt;
+    // Sous un pont : la voiture tape le tablier
+    if (deck && c.vz > 0 && c.z < deck.h - DECK_TOL && c.z + CAR_H > deck.h) { c.z = deck.h - CAR_H; c.vz = 0; sparks(c.x, c.y, c.z + CAR_H, 8); }
     if (c.z <= g) {
       if (c.vz < -10) { landing(c, -c.vz); c.vx *= 0.9; c.vy *= 0.9; }
       c.z = g; c.vz = 0; c.air = false;
+      if (g > 0 && onDownRamp(L1.s) && g !== (deck && deck.h)) { c.boost = Math.max(c.boost, LAND_BOOST); c.msg = { txt: 'PILE !', t: 0.8 }; if (c.human) tone(520, 0.2, 'triangle', 0.14, 900); }
       endTricks(c);
     }
   } else if (g > c.z + RAMP_EDGE) {
-    // Tremplin pris par l'arrière : la voiture part vers le ciel
-    c.z = g;
-    if (Math.hypot(c.vx, c.vy) > BACK_MIN_V) launch(c, c.human ? BACK_VZ : CATA_VZ); else c.lastRise = 0; // une IA qui recule ne part pas 8 s en l'air
-  } else if (g < c.z - 0.04) { c.air = true; c.vz = Math.max(0, c.lastRise); }
-  else { c.lastRise = (g - c.z) / dt; c.z = g; }
-  if (!c.air) for (const p of CATAPULTS) {
-    if (Math.abs(L1.s - p.s0) < CATA_LEN / 2 && Math.abs(L1.d - p.off) < CATA_HW) { p.t = CATA_ANIM; launch(c, CATA_VZ); break; }
+    // Tremplin abordé par le bord haut : pas d'éjection, la voiture passe simplement dessus
+    c.z = g; c.lastRise = 0;
+  } else if (g < c.z - 0.04 && !onDownRamp(L1.s)) {
+    c.air = true; c.vz = Math.max(0, c.lastRise);
+    if (c.human && atLip(L1.s)) { if (c.nitroT > 0) superJump(c); else c.lipT = SUPER_AFTER; }
   }
+  else { c.lastRise = (g - c.z) / dt; c.z = g; }
+  if (!c.air && c.z < 1) for (const p of CATAPULTS) {
+    if (Math.abs(L1.s - p.s0) < CATA_LEN / 2 && Math.abs(L1.d - p.off) < CATA_HW && Math.abs(c.f) > CATA_MIN_V) { p.t = CATA_ANIM; launch(c, p.vz); break; }
+  }
+  if (!c.air && c.z <= 0.01) { const gap = gapAt(L1.s); if (gap) enterPit(c, gap); }
 
   // Progression / tours
   const di = L1.i - c.idx;
@@ -941,9 +1067,9 @@ function watchdog(c, dt) {
   }
 }
 // Replace la voiture un peu en arrière, au sol, sur la file la plus dégagée, en fantôme quelques instants
-function respawn(c) {
-  let i = (c.idx - Math.round(4 / SP) + N) % N;
-  for (let k = 0; k < 90 && (groundH(i * SP) > 0 || inLoopZone(i * SP)); k++) i = (i - 1 + N) % N;
+function respawn(c, back = 4) {
+  let i = (c.idx - Math.round(back / SP) + N) % N;
+  for (let k = 0; k < 90 && (groundH(i * SP) > 0 || inLoopZone(i * SP) || gapAt(i * SP)); k++) i = (i - 1 + N) % N;
   if (i > c.idx + N / 2) c.lap--; else if (i < c.idx - N / 2) c.lap++;
   let lane = 0, room = -1;
   for (const l of [0, -3.5, 3.5]) {
@@ -1069,7 +1195,7 @@ function skid(c) {
   const hx = Math.cos(c.ang), hy = Math.sin(c.ang);
   for (const sgn of [-1, 1]) {
     const x = c.x - hx * 1.1 - hy * 1.0 * sgn, y = c.y - hy * 1.1 + hx * 1.0 * sgn;
-    dummy.position.set(x, SURF + groundH(locateNear(x, y, c.idx).s) + 0.02, y); dummy.rotation.set(0, -c.ang + Math.PI / 2, 0); dummy.updateMatrix();
+    dummy.position.set(x, SURF + c.z + 0.02, y); dummy.rotation.set(0, -c.ang + Math.PI / 2, 0); dummy.updateMatrix();
     skidMesh.setMatrixAt(skidN % MAX_SKID, dummy.matrix); skidN++;
   }
   skidMesh.count = Math.min(skidN, MAX_SKID); skidMesh.instanceMatrix.needsUpdate = true;
@@ -1087,12 +1213,30 @@ function updateParticles(dt) {
 function spawnPickup() {
   for (let tries = 0; tries < 20; tries++) {
     const i = (Math.random() * N) | 0, s = i * SP;
-    if (groundH(s) > 0 || inLoopZone(s) || s < 12 || s > LEN - 40) continue;
+    if (groundH(s) > 0 || inLoopZone(s) || gapAt(s) || s < 12 || s > LEN - 40) continue;
     const d = (Math.random() * 2 - 1) * (HALF_W - 2);
     pickups.push({ x: PX[i] + NX[i] * d, y: PY[i] + NY[i] * d, t: 0 }); return;
   }
 }
+const deckCans = CIRCUIT.cans.map(([s, off]) => {
+  const i = Math.round(s / SP) % N, h = deckAt(s).h, x = PX[i] + NX[i] * off, y = PY[i] + NY[i] * off;
+  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 1.3, 12), new THREE.MeshPhongMaterial({ color: 0x3ccf5c, emissive: 0x0d4a18, shininess: 80 }));
+  mesh.position.set(x, SURF + h + 0.9, y); scene.add(shadowy(mesh));
+  return { x, y, h, mesh, t: 0 };
+});
+function updateDeckCans(dt) {
+  for (const k of deckCans) {
+    k.t = Math.max(0, k.t - dt); k.mesh.visible = k.t <= 0;
+    if (k.t > 0) continue;
+    for (const c of cars) if (Math.abs(c.z - k.h) < 1.5 && (c.x - k.x) ** 2 + (c.y - k.y) ** 2 < 5) {
+      k.t = DECK_CAN_RESPAWN; c.nitro = Math.min(MAX_NITRO, c.nitro + 1);
+      if (c.human) tone(880, 0.2, 'triangle', 0.15, 1320);
+      break;
+    }
+  }
+}
 function updatePickups(dt) {
+  updateDeckCans(dt);
   if ((pickupTimer -= dt) < 0 && pickups.length < 3) { pickupTimer = 5 + Math.random() * 5; spawnPickup(); }
   for (const p of pickups) {
     p.t += dt;
@@ -1134,8 +1278,8 @@ function updateCamera(c, dt, aspect) {
   const ch = Math.cos(c.camYaw), sh = Math.sin(c.camYaw);
   let rate = 8, upX = 0, upY = 1, upZ = 0;
   // Derrière la voiture, décalée un peu vers la droite (vecteur droite = (-sh, ch))
-  let px = c.x - ch * 11 - sh * CAM_RIGHT, py = c.y - sh * 11 + ch * CAM_RIGHT, pz = c.z * 0.6 + 4.8;
-  let lx = c.x + ch * 6 - sh * 0.8, ly = c.y + sh * 6 + ch * 0.8, lz = c.z * 0.7 + 1.2;
+  let px = c.x - ch * 11 - sh * CAM_RIGHT, py = c.y - sh * 11 + ch * CAM_RIGHT, pz = Math.max(0, c.z) * 0.6 + 4.8;
+  let lx = c.x + ch * 6 - sh * 0.8, ly = c.y + sh * 6 + ch * 0.8, lz = Math.max(0, c.z) * 0.7 + 1.2;
   // Grand vol : la caméra monte avec la voiture
   const hi = smooth((c.z - HIGH_Z + 3) / 10);
   pz = lerp(pz, c.z + HIGH_CAM_UP, hi); lz = lerp(lz, c.z - HIGH_CAM_DOWN, hi); // regarde vers le bas pour voir le sol s'éloigner
@@ -1181,6 +1325,8 @@ function drawMinimap(vx, vw) {
   g.strokeStyle = 'rgba(255,230,190,.85)'; g.lineWidth = 4; g.lineJoin = 'round'; g.beginPath();
   for (let i = 0; i <= N; i += 4) { const [a, b] = tf(PX[i % N], PY[i % N]); i ? g.lineTo(a, b) : g.moveTo(a, b); }
   g.closePath(); g.stroke();
+  g.strokeStyle = '#6fc3ff'; g.lineWidth = 4;
+  for (const k of DECKS) { g.beginPath(); for (let i = Math.round(k.s0 / SP); i <= Math.round(k.s1 / SP); i += 4) { const [a, b] = tf(PX[i % N], PY[i % N]); g.lineTo(a, b); } g.stroke(); }
   g.strokeStyle = '#f2c230'; g.lineWidth = 2;
   for (const L of LOOPS) { const [a, b] = tf(L.x, L.y); g.beginPath(); g.arc(a, b, 4, 0, 6.283); g.stroke(); }
   g.fillStyle = '#cf2d22';
@@ -1262,10 +1408,13 @@ function showResults() {
 function updateMenuLabels() {
   $('bCpu').textContent = opt.cpu ? 'Adversaires ordinateur : oui' : 'Adversaires ordinateur : non';
   $('bLaps').textContent = `Tours : ${opt.laps}`;
+  $('bCircuit').textContent = `Circuit ${CIRCUIT_ID + 1} : ${CIRCUIT.name}`;
 }
 $('b1').onclick = () => { opt.players = 1; startRace(); };
 $('b2').onclick = () => { opt.players = 2; startRace(); };
 $('bCpu').onclick = () => { opt.cpu = !opt.cpu; updateMenuLabels(); };
+// Changer de circuit recharge la page : le décor et la piste sont construits au chargement
+$('bCircuit').onclick = () => { location.search = `?circuit=${(CIRCUIT_ID + 1) % CIRCUITS.length + 1}&players=${opt.players}&cpu=${opt.cpu ? 1 : 0}&laps=${opt.laps}`; };
 $('bLaps').onclick = () => { opt.laps = opt.laps === 3 ? 5 : opt.laps === 5 ? 8 : 3; updateMenuLabels(); };
 $('bAgain').onclick = startRace;
 $('bMenu').onclick = showMenu;
@@ -1283,6 +1432,7 @@ function update(dt) {
   if (state !== 'race') return;
   raceTime += dt;
   for (const c of cars) {
+    if (c.pit > 0) { updatePit(c, dt); continue; }
     if (!c.rail) tryLoop(c);
     const inp = (c.human && !c.done) ? humanInput(c.slot, opt.players === 1)
       : c.rail ? { thr: 1, steer: clamp(c.rail.loop.canOff - c.rail.off, -1, 1), nitro: false, trick: false } : aiInput(c);
